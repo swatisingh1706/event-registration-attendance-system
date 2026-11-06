@@ -1,0 +1,10 @@
+node_modules
+.next
+.env
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+# agent helper files added by Neon/Vercel tooling
+.agents/
+skills-lock.json

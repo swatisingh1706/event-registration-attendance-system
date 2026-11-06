@@ -1,0 +1,294 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PARTICIPANT
+  CHECKIN_STAFF
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  FULL
+  COMPLETED
+  CANCELLED
+}
+
+enum EventCategory {
+  COMMUNITY
+  ENVIRONMENT
+  EDUCATION
+  HEALTH_AWARENESS
+  FOOD_DISTRIBUTION
+  VOLUNTEERING
+  FUNDRAISING
+  SKILL_DEVELOPMENT
+  OTHER
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  CANCELLED
+}
+
+enum CheckInMethod {
+  QR_SCAN
+  MANUAL_ID
+  ADMIN_OVERRIDE
+}
+
+enum PartnerType {
+  NGO
+  COMPANY
+  EDUCATIONAL
+  COMMUNITY
+  GOVERNMENT
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  name               String
+  email              String    @unique
+  passwordHash       String
+  phone              String?
+  organization       String?
+  city               String?
+  image              String?
+  /// Set when the person has proved they own the address (only enforced when outbound email is configured).
+  emailVerifiedAt    DateTime?
+  /// Sessions issued before this moment are rejected (set when the password changes).
+  sessionsValidAfter DateTime?
+  role               Role      @default(PARTICIPANT)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  volunteerProfile VolunteerProfile?
+  registrations    Registration[]
+  checkIns         Attendance[]             @relation("CheckedInBy")
+  resetTokens      PasswordResetToken[]
+  verifyTokens     EmailVerificationToken[]
+  createdEvents    Event[]                  @relation("EventCreator")
+
+  @@index([role])
+}
+
+model VolunteerProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  interests String[]
+  bio       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Uploaded images (event covers, partner logos, branding) stored in PostgreSQL so the app needs no extra storage service.
+model Upload {
+  id        String   @id @default(cuid())
+  mime      String
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+  createdBy String?
+}
+
+model Event {
+  id                    String        @id @default(cuid())
+  title                 String
+  slug                  String        @unique
+  description           String
+  coverImage            String?
+  category              EventCategory @default(COMMUNITY)
+  /// Calendar date of the event (wall-clock, no timezone).
+  date                  DateTime      @db.Date
+  /// Wall-clock times, "HH:mm".
+  startTime             String
+  endTime               String
+  location              String
+  address               String?
+  capacity              Int
+  /// Wall-clock deadline stored as naive UTC (see lib/datetime.ts).
+  registrationDeadline  DateTime?
+  status                EventStatus   @default(DRAFT)
+  organizer             String
+  contactEmail          String?
+  contactPhone          String?
+  agenda                Json          @default("[]")
+  volunteerRequirements String?
+  createdById           String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  createdBy     User?          @relation("EventCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  registrations Registration[]
+  attendances   Attendance[]
+  partners      EventPartner[]
+  sdgs          EventSDG[]
+
+  @@index([status, date])
+  @@index([category])
+  @@index([date])
+}
+
+model Registration {
+  id                 String             @id @default(cuid())
+  userId             String
+  eventId            String
+  seq                Int                @unique @default(autoincrement())
+  ticketToken        String             @unique
+  registrationNumber String             @unique
+  status             RegistrationStatus @default(REGISTERED)
+  fullName           String
+  email              String
+  phone              String
+  organization       String?
+  city               String?
+  volunteerInterest  String?
+  isVolunteer        Boolean            @default(false)
+  consentGiven       Boolean            @default(true)
+  registeredAt       DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event      Event       @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  attendance Attendance?
+
+  @@unique([userId, eventId])
+  @@index([eventId, status])
+  @@index([registeredAt])
+}
+
+model Attendance {
+  id             String        @id @default(cuid())
+  registrationId String        @unique
+  eventId        String
+  checkedInAt    DateTime      @default(now())
+  checkedInById  String?
+  method         CheckInMethod
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  event        Event        @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  checkedInBy  User?        @relation("CheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
+
+  @@index([eventId, checkedInAt])
+  @@index([checkedInAt])
+}
+
+model Partner {
+  id            String      @id @default(cuid())
+  name          String
+  logo          String?
+  description   String?
+  website       String?
+  contactPerson String?
+  contactEmail  String?
+  type          PartnerType @default(NGO)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  events EventPartner[]
+
+  @@index([type])
+}
+
+model EventPartner {
+  eventId   String
+  partnerId String
+
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, partnerId])
+  @@index([partnerId])
+}
+
+model SDGGoal {
+  id          String  @id @default(cuid())
+  number      Int     @unique
+  title       String
+  description String?
+
+  events EventSDG[]
+}
+
+model EventSDG {
+  eventId String
+  sdgId   String
+
+  event Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sdg   SDGGoal @relation(fields: [sdgId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, sdgId])
+  @@index([sdgId])
+}
+
+/// Singleton row (id = "default") holding the NGO's configurable branding.
+model OrgSettings {
+  id                 String   @id @default("default")
+  name               String   @default("GreenBridge Foundation")
+  shortName          String   @default("GreenBridge")
+  ticketPrefix       String   @default("GBF")
+  tagline            String   @default("Small actions. Stronger communities.")
+  description        String   @default("")
+  logoUrl            String?
+  heroImageUrl       String?
+  contactEmail       String?
+  contactPhone       String?
+  address            String?
+  website            String?
+  facebookUrl        String?
+  instagramUrl       String?
+  linkedinUrl        String?
+  twitterUrl         String?
+  /// Check-in opens this many hours before an event starts and closes this many hours after it ends. 0 = no limit.
+  checkInWindowHours Int      @default(24)
+  primaryColor       String   @default("#1F5D45")
+  accentColor        String   @default("#7FAF91")
+  updatedAt          DateTime @updatedAt
+}
+
+/// Fixed-window counters used to rate limit login, reset and check-in calls.
+model RateLimit {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+
+  @@index([windowStart])
+}
